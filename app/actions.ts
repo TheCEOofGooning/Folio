@@ -1,0 +1,21 @@
+"use server";
+import { redirect } from "next/navigation";import { revalidatePath } from "next/cache";import { createSession, getUser, hashPassword, verifyPassword } from "@/lib/auth";import { query } from "@/lib/db";import { slugify } from "@/lib/utils";
+export type FormState={error?:string;success?:string};
+export async function register(_:FormState,form:FormData):Promise<FormState>{
+ const name=String(form.get("name")||"").trim(),email=String(form.get("email")||"").trim().toLowerCase(),username=slugify(String(form.get("username")||"")).replace(/-/g,"_"),password=String(form.get("password")||"");
+ if(!name||!email.includes("@")||username.length<3||password.length<8)return{error:"Please complete every field. Passwords need at least 8 characters."};
+ try{const hash=await hashPassword(password);const [user]=await query<{id:string}>("INSERT INTO users(name,email,username,password_hash) VALUES($1,$2,$3,$4) RETURNING id",[name,email,username,hash]);await createSession(user.id)}catch(e){if(String(e).includes("unique"))return{error:"That email or username is already in use."};return{error:"Could not create your account. Check the database setup."}}
+ redirect("/dashboard");
+}
+export async function login(_:FormState,form:FormData):Promise<FormState>{
+ const email=String(form.get("email")||"").trim().toLowerCase(),password=String(form.get("password")||"");
+ try{const [user]=await query<{id:string;password_hash:string}>("SELECT id,password_hash FROM users WHERE email=$1",[email]);if(!user||!await verifyPassword(password,user.password_hash))return{error:"Email or password is incorrect."};await createSession(user.id)}catch{return{error:"Could not sign in. Please try again."}}redirect("/dashboard");
+}
+export async function savePost(_:FormState,form:FormData):Promise<FormState>{
+ const user=await getUser();if(!user)return{error:"Please sign in again."};const id=String(form.get("id")||"")||null,title=String(form.get("title")||"").trim(),subtitle=String(form.get("subtitle")||"").trim(),content=String(form.get("content")||""),cover=String(form.get("cover")||"").trim()||null,status=String(form.get("intent"))==="publish"?"published":"draft",tags=String(form.get("tags")||"").split(",").map(x=>x.trim()).filter(Boolean).slice(0,5);
+ if(!title)return{error:"Give your story a title first."};const slug=`${slugify(title)}-${id?.slice(0,6)||crypto.randomUUID().slice(0,6)}`;const minutes=Math.max(1,Math.ceil(content.trim().split(/\s+/).length/220));
+ try{const [post]=await query<{id:string;slug:string}>(id?"UPDATE posts SET title=$1,subtitle=$2,content=$3,cover_url=$4,status=$5,reading_minutes=$6,published_at=CASE WHEN $5='published' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$7 AND author_id=$8 RETURNING id,slug":"INSERT INTO posts(title,subtitle,content,cover_url,status,reading_minutes,published_at,author_id,slug) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $5='published' THEN now() END,$8,$9) RETURNING id,slug",id?[title,subtitle,content,cover,status,minutes,id,user.id]:[title,subtitle,content,cover,status,minutes,null,user.id,slug]);
+ await query("DELETE FROM post_tags WHERE post_id=$1",[post.id]);for(const tag of tags){const tagSlug=slugify(tag);const [row]=await query<{id:number}>("INSERT INTO tags(name,slug) VALUES($1,$2) ON CONFLICT(slug) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tag,tagSlug]);await query("INSERT INTO post_tags(post_id,tag_id) VALUES($1,$2) ON CONFLICT DO NOTHING",[post.id,row.id])}revalidatePath("/");if(status==="published")redirect(`/p/${post.slug}`);return{success:"Draft saved"};}catch(e){console.error(e);return{error:"Your story could not be saved. Please try again."}}
+}
+export async function deletePost(form:FormData){const user=await getUser();if(user)await query("DELETE FROM posts WHERE id=$1 AND author_id=$2",[String(form.get("id")),user.id]);revalidatePath("/dashboard")}
+export async function updateProfile(form:FormData){const user=await getUser();if(!user)redirect("/login");const name=String(form.get("name")||"").trim().slice(0,60),username=slugify(String(form.get("username")||"")).replace(/-/g,"_").slice(0,30),bio=String(form.get("bio")||"").trim().slice(0,500);if(name&&username.length>=3)await query("UPDATE users SET name=$1,username=$2,bio=$3 WHERE id=$4",[name,username,bio,user.id]);revalidatePath("/settings");revalidatePath("/")}
