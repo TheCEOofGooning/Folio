@@ -20,5 +20,6 @@ export async function savePost(_:FormState,form:FormData):Promise<FormState>{
  console.error(e);
  return{error:"Your story could not be saved. Please try again."}
 }
+}
 export async function deletePost(form:FormData){const user=await getUser();if(user)await query("DELETE FROM posts WHERE id=$1 AND author_id=$2",[String(form.get("id")),user.id]);revalidatePath("/dashboard")}
 export async function updateProfile(form:FormData){const user=await getUser();if(!user)redirect("/login");const name=String(form.get("name")||"").trim().slice(0,60),username=slugify(String(form.get("username")||"")).replace(/-/g,"_").slice(0,30),bio=String(form.get("bio")||"").trim().slice(0,500);if(name&&username.length>=3)await query("UPDATE users SET name=$1,username=$2,bio=$3 WHERE id=$4",[name,username,bio,user.id]);revalidatePath("/settings");revalidatePath("/")}
